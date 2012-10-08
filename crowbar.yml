@@ -11,6 +11,9 @@ barclamp:
 
 crowbar:
   layout: 1
+  order: 70
+  run_order: 70
+  chef_order: 70
 
 # TODO crowbar *and* chef cookbooks don't really need -dbg
 debs:
