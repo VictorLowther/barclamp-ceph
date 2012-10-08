@@ -74,8 +74,7 @@ ruby_block "create client.admin keyring" do
       else
         # TODO --set-uid=0
         key = %x[
-        ceph \
-          --name mon. \
+        ceph \          --name mon. \
           --keyring '/var/lib/ceph/mon/#{cluster}-#{node['hostname']}/keyring' \
           auth get-or-create-key client.admin \
           mon 'allow *' \
@@ -97,39 +96,32 @@ end
 
 ruby_block "save bootstrap keys in node attributes" do
   block do
-    if node['ceph_bootstrap_osd_key'].nil? then
-      raise "missing bootstrap_osd key but do have bootstrap_client key!" unless node['ceph_bootstrap_client_key'].nil?
+    case 
+    when node['ceph_bootstrap_osd_key'].nil? && node['ceph_bootstrap_client_key'].nil?
       if not have_quorum? then
         Chef::Log.info('ceph-mon is not in quorum, skipping bootstrap key generation for this run')
       else
-        osd_key = %x[
-          ceph \
-            --name mon. \
-            --keyring '/var/lib/ceph/mon/#{cluster}-#{node['hostname']}/keyring' \
-            auth get-or-create-key client.bootstrap-osd mon \
-            "allow command osd create ...; \
-            allow command osd crush set ...; \
-            allow command auth add * osd allow\\ * mon allow\\ rwx; \
-            allow command mon getmap"
-        ]
-        raise 'adding or getting bootstrap-osd key failed' unless $?.exitstatus == 0
-        node.override['ceph_bootstrap_osd_key'] = osd_key
-
-        client_key = %x[
-          ceph \
-            --name mon. \
-            --keyring '/var/lib/ceph/mon/#{cluster}-#{node['hostname']}/keyring' \
-            auth get-or-create-key client.bootstrap-client mon \
-            "allow command auth get-or-create-key * osd * mon *;"
-        ]
-        raise 'adding or getting bootstrap-client key failed' unless $?.exitstatus == 0
-        node.override['ceph_bootstrap_client_key'] = client_key
-        
+        [["ceph_bootstrap_osd_key", "ceph --name mon. --keyring '/var/lib/ceph/mon/#{cluster}-#{node['hostname']}/keyring' auth get-or-create-key client.bootstrap-osd mon 'allow command osd create ...; allow command osd crush set ...; allow command auth add * osd allow\\ * mon allow\\ rwx; allow command mon getmap'"],
+         ["ceph_bootstrap_client_key", "ceph --name mon. --keyring '/var/lib/ceph/mon/#{cluster}-#{node['hostname']}/keyring' auth get-or-create-key client.bootstrap-client mon 'allow command auth get-or-create-key * osd * mon *;'"]].each do |v|
+          cmd = Chef::ShellOut.new(v[1])
+          cmd.run_command
+          if cmd.exitstatus != 0
+            Chef::Log.fatal("Could not add or get bootstrap OSD key!")
+            Chef::Log.fatal("Stdout: #{cmd.stdout}")
+            Chef::Log.fatal("Stderr: #{cmd.stderr}")
+            raise "Adding or getting #{v[0]} failed"
+          end
+          Chef::Log.info("Saving #{v[0]} to node object.")
+          node[v[0]] = cmd.stdout.strip.chomp
+        end
         node.save
       end
-    else #node['ceph_bootstrap_osd_key'] not nil
-      raise "have ceph_bootstrap_osd_key but not bootstrap_client key!" unless !node['ceph_bootstrap_client_key'].nil?
+    when node['ceph_bootstrap_client_key']
+      raise "missing bootstrap_osd key but do have bootstrap_client key!"
+    when node['ceph_bootstrap_osd_key']
+      raise "have ceph_bootstrap_osd_key but not bootstrap_client key!"
     end
   end
+  not_if do node['ceph_bootstrap_osd_key'] && node['ceph_bootstrap_client_key'] end
 end
 
